@@ -141,5 +141,6 @@ echo
 echo "Starte den Bot auf GitHub neu (mit Testnachricht + Probe-Alarm) …"
 for id in $(gh run list --workflow stock-bot.yml --status in_progress --json databaseId -q '.[].databaseId'); do gh run cancel "$id" >/dev/null || true; done
 for id in $(gh run list --workflow stock-bot.yml --status queued --json databaseId -q '.[].databaseId'); do gh run cancel "$id" >/dev/null || true; done
+gh workflow enable stock-bot.yml >/dev/null 2>&1 || true
 sleep 5
 gh workflow run stock-bot.yml -f mode=test && echo "✓ Fertig. In 1–2 Minuten sollten Testnachricht und Probe-Alarm auf dem Handy sein."
