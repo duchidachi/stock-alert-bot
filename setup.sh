@@ -29,7 +29,7 @@ if [[ "$DO_TG" =~ ^[jJyY] ]]; then
   [[ -z "$TOKEN" ]] && { echo "✗ Kein Token gefunden (sieht aus wie 1234567890:AAH…). Skript neu starten."; exit 1; }
   api() { curl -sS "https://api.telegram.org/bot${TOKEN}/$1" "${@:2}"; }
   USERNAME=""
-  for try in 1 2 3 4 5 6; do
+  for try in 1 2; do
     RES="$(api getMe 2>/dev/null || true)"
     IFS="|" read -r USERNAME WAIT ERR < <(printf '%s' "$RES" | python3 -c '
 import sys,json
@@ -41,29 +41,51 @@ else: print("|%s|%s" % ((d.get("parameters") or {}).get("retry_after", 0), d.get
     if [[ "$ERR" == "401" || "$ERR" == "404" ]]; then
       echo "✗ Telegram sagt: Token ungültig. Nochmal komplett aus dem BotFather-Chat kopieren."; exit 1
     fi
-    W=$(( WAIT > 0 ? WAIT + 2 : 10 * try ))
-    echo "… Telegram antwortet gerade nicht (Fehler $ERR), neuer Versuch in ${W}s ($try/6)"
-    sleep "$W"
+    [[ $try -lt 2 ]] && { echo "… Telegram antwortet von hier nicht (Fehler $ERR), nochmal in 10s"; sleep 10; }
   done
   unset RES
-  [[ -z "$USERNAME" ]] && { echo "✗ Telegram nicht erreichbar. In ein paar Minuten Skript nochmal starten."; exit 1; }
-  echo "✓ Bot gefunden: @$USERNAME"
-  api deleteWebhook >/dev/null || true
-  echo "Öffne jetzt https://t.me/$USERNAME und tippe auf START. Ich warte bis zu 3 Minuten …"
-  open "https://t.me/$USERNAME" 2>/dev/null || true
-  CHAT=""
-  for _ in $(seq 1 36); do
-    CHAT="$( (api getUpdates || true) | python3 -c '
+  printf '%s' "$TOKEN" | gh secret set TELEGRAM_BOT_TOKEN
+  if [[ -n "$USERNAME" ]]; then
+    # --- direkter Weg vom Mac
+    echo "✓ Bot gefunden: @$USERNAME"
+    api deleteWebhook >/dev/null || true
+    echo "Öffne jetzt https://t.me/$USERNAME und tippe auf START. Ich warte bis zu 3 Minuten …"
+    open "https://t.me/$USERNAME" 2>/dev/null || true
+    CHAT=""
+    for _ in $(seq 1 36); do
+      CHAT="$( (api getUpdates || true) | python3 -c '
 import sys,json
 try: r=json.load(sys.stdin).get("result",[])
 except Exception: r=[]
 ids=[u[k]["chat"]["id"] for u in r for k in ("message","my_chat_member") if k in u]
 print(ids[-1] if ids else "")' )"
-    [[ -n "$CHAT" ]] && break
-    sleep 5
-  done
-  [[ -z "$CHAT" ]] && { echo "✗ Keine Nachricht angekommen. Beim richtigen Bot auf START getippt? Skript nochmal starten."; exit 1; }
-  printf '%s' "$TOKEN" | gh secret set TELEGRAM_BOT_TOKEN
+      [[ -n "$CHAT" ]] && break
+      sleep 5
+    done
+  else
+    # --- Ausweichweg: Telegram blockt diese Internetverbindung -> GitHub-Runner verbindet
+    echo "→ Telegram blockt Bot-Anfragen von deiner Verbindung (Fehler $ERR). Ich verbinde über GitHub."
+    KEY="$(openssl rand -hex 32)"
+    printf '%s' "$KEY" | gh secret set CONNECT_KEY
+    gh workflow enable connect.yml >/dev/null 2>&1 || true
+    gh workflow run connect.yml
+    echo
+    echo "Öffne jetzt in Telegram deinen NEUEN Bot (Link steht in der BotFather-Nachricht, t.me/…)"
+    echo "und tippe auf START. Der GitHub-Runner wartet bis zu 4 Minuten darauf …"
+    sleep 8
+    RID="$(gh run list --workflow connect.yml --limit 1 --json databaseId -q '.[0].databaseId')"
+    gh run watch "$RID" --exit-status >/dev/null 2>&1 || true
+    ENC="$(gh run view "$RID" --log 2>/dev/null | grep -oE 'CONNECT:[A-Za-z0-9+/=]+' | tail -1 | cut -d: -f2 || true)"
+    CHAT=""; USERNAME=""
+    if [[ -n "$ENC" ]]; then
+      DEC="$(printf '%s\n' "$ENC" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -a -A -pass "pass:$KEY" 2>/dev/null || true)"
+      CHAT="${DEC%%|*}"; USERNAME="${DEC#*|}"
+    fi
+    unset KEY ENC DEC
+    gh secret delete CONNECT_KEY >/dev/null 2>&1 || true
+    [[ -n "$USERNAME" ]] && echo "✓ Bot: @$USERNAME"
+  fi
+  [[ -z "$CHAT" ]] && { echo "✗ Keine START-Nachricht angekommen. Beim richtigen Bot auf START getippt? Skript nochmal starten."; exit 1; }
   printf '%s' "$CHAT"  | gh secret set TELEGRAM_CHAT_ID
   unset TOKEN CHAT
   echo "✓ Telegram in GitHub gespeichert"
