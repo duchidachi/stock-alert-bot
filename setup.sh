@@ -27,9 +27,26 @@ if [[ "$DO_TG" =~ ^[jJyY] ]]; then
   TOKEN="$(printf '%s' "$RAW" | grep -oE '[0-9]{8,12}:[A-Za-z0-9_-]{30,}' | head -1 || true)"
   unset RAW
   [[ -z "$TOKEN" ]] && { echo "✗ Kein Token gefunden (sieht aus wie 1234567890:AAH…). Skript neu starten."; exit 1; }
-  api() { curl -fsS "https://api.telegram.org/bot${TOKEN}/$1" "${@:2}"; }
-  USERNAME="$( (api getMe || true) | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["username"])' 2>/dev/null || true)"
-  [[ -z "$USERNAME" ]] && { echo "✗ Token ungültig. Nochmal komplett aus dem BotFather-Chat kopieren."; exit 1; }
+  api() { curl -sS "https://api.telegram.org/bot${TOKEN}/$1" "${@:2}"; }
+  USERNAME=""
+  for try in 1 2 3 4 5 6; do
+    RES="$(api getMe 2>/dev/null || true)"
+    IFS="|" read -r USERNAME WAIT ERR < <(printf '%s' "$RES" | python3 -c '
+import sys,json
+try: d=json.load(sys.stdin)
+except Exception: d={}
+if d.get("ok"): print(d["result"]["username"]+"|0|-")
+else: print("|%s|%s" % ((d.get("parameters") or {}).get("retry_after", 0), d.get("error_code", "netz")))' 2>/dev/null || echo "|0|netz")
+    [[ -n "$USERNAME" ]] && break
+    if [[ "$ERR" == "401" || "$ERR" == "404" ]]; then
+      echo "✗ Telegram sagt: Token ungültig. Nochmal komplett aus dem BotFather-Chat kopieren."; exit 1
+    fi
+    W=$(( WAIT > 0 ? WAIT + 2 : 10 * try ))
+    echo "… Telegram antwortet gerade nicht (Fehler $ERR), neuer Versuch in ${W}s ($try/6)"
+    sleep "$W"
+  done
+  unset RES
+  [[ -z "$USERNAME" ]] && { echo "✗ Telegram nicht erreichbar. In ein paar Minuten Skript nochmal starten."; exit 1; }
   echo "✓ Bot gefunden: @$USERNAME"
   api deleteWebhook >/dev/null || true
   echo "Öffne jetzt https://t.me/$USERNAME und tippe auf START. Ich warte bis zu 3 Minuten …"
