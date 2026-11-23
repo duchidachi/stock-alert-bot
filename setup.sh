@@ -16,7 +16,7 @@ LS="https://www.ls-tc.de/_rpc/json/.lstc/instrument/search/main?localeId=2&q="
 # ------------------------------------------------------------------ 1 Telegram
 echo "== 1/4 Telegram-Bot =="
 DO_TG="j"
-if have_secret TELEGRAM_BOT_TOKEN && have_secret TELEGRAM_CHAT_ID; then
+if have_secret TELEGRAM_BOT_TOKEN; then
   DO_TG="$(ask "Telegram ist schon eingerichtet. Neu verbinden? [j/N] ")"
 fi
 if [[ "$DO_TG" =~ ^[jJyY] ]]; then
@@ -63,30 +63,18 @@ print(ids[-1] if ids else "")' )"
       sleep 5
     done
   else
-    # --- Ausweichweg: Telegram blockt diese Internetverbindung -> GitHub-Runner verbindet
-    echo "→ Telegram blockt Bot-Anfragen von deiner Verbindung (Fehler $ERR). Ich verbinde über GitHub."
-    KEY="$(openssl rand -hex 32)"
-    printf '%s' "$KEY" | gh secret set CONNECT_KEY
-    gh workflow enable connect.yml >/dev/null 2>&1 || true
-    gh workflow run connect.yml
-    echo
-    echo "Öffne jetzt in Telegram deinen NEUEN Bot (Link steht in der BotFather-Nachricht, t.me/…)"
-    echo "und tippe auf START. Der GitHub-Runner wartet bis zu 4 Minuten darauf …"
-    sleep 8
-    RID="$(gh run list --workflow connect.yml --limit 1 --json databaseId -q '.[0].databaseId')"
-    gh run watch "$RID" --exit-status >/dev/null 2>&1 || true
-    ENC="$(gh run view "$RID" --log 2>/dev/null | grep -oE 'CONNECT:[A-Za-z0-9+/=]+' | tail -1 | cut -d: -f2 || true)"
-    CHAT=""; USERNAME=""
-    if [[ -n "$ENC" ]]; then
-      DEC="$(printf '%s\n' "$ENC" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -a -A -pass "pass:$KEY" 2>/dev/null || true)"
-      CHAT="${DEC%%|*}"; USERNAME="${DEC#*|}"
-    fi
-    unset KEY ENC DEC
-    gh secret delete CONNECT_KEY >/dev/null 2>&1 || true
-    [[ -n "$USERNAME" ]] && echo "✓ Bot: @$USERNAME"
+    # --- Telegram drosselt gerade: der Bot auf GitHub verbindet sich später selbst
+    CHAT=""
+    gh secret delete TELEGRAM_CHAT_ID >/dev/null 2>&1 || true
+    openssl rand -base64 32 | tr -d '\n' | gh secret set STATE_KEY >/dev/null   # alten Zustand verwerfen
+    echo "→ Telegram bremst gerade Bot-Anfragen (Fehler $ERR). Kein Problem:"
+    echo "  Das Token ist gespeichert. Tipp in Telegram bei deinem neuen Bot auf START (falls noch nicht)."
+    echo "  Der Bot auf GitHub verbindet sich automatisch, sobald Telegram wieder Anfragen durchlässt."
   fi
-  [[ -z "$CHAT" ]] && { echo "✗ Keine START-Nachricht angekommen. Beim richtigen Bot auf START getippt? Skript nochmal starten."; exit 1; }
-  printf '%s' "$CHAT"  | gh secret set TELEGRAM_CHAT_ID
+  if [[ -n "$CHAT" ]]; then
+    printf '%s' "$CHAT"  | gh secret set TELEGRAM_CHAT_ID
+    echo "✓ Chat verbunden"
+  fi
   unset TOKEN CHAT
   echo "✓ Telegram in GitHub gespeichert"
 else

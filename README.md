@@ -49,7 +49,9 @@ Voraussetzung: `gh` ist eingeloggt (mit `workflow`-Scope).
    ./setup.sh
    ```
    Das Skript
-   - liest das Bot-Token aus der Zwischenablage, du tippst im Bot auf START, die Chat-ID kommt automatisch;
+   - liest das Bot-Token aus der Zwischenablage, du tippst im Bot auf START, die Chat-ID kommt automatisch
+     (bremst Telegram gerade, verbindet sich der Bot auf GitHub später selbst: die erste
+     private Nachricht an den Bot legt den Chat fest, gespeichert im verschlüsselten Zustand);
    - fragt die Watchlist ab: Firmenname oder ISIN eingeben, Treffer auswählen, optional
      Einstiegskurs und „Alarm bei X % unter Einstieg“;
    - fragt Schwellen und Finnhub-Key (beides optional);

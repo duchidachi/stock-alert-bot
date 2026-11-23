@@ -30,6 +30,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -219,17 +220,56 @@ def esc(s: str) -> str:
     return html.escape(s, quote=False)
 
 
+CHAT_ID: str | None = None
+
+
+def tg(method: str, params: dict | None = None):
+    """Telegram-API-Aufruf; wartet bei kurzer Drosselung (429) und versucht es erneut."""
+    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    data = urllib.parse.urlencode(params or {}).encode()
+    for attempt in range(3):
+        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/{method}", data=data)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or attempt == 2:
+                raise
+            try:
+                wait = json.load(e).get("parameters", {}).get("retry_after", 5)
+            except Exception:
+                wait = 5
+            if wait > 60:
+                raise
+            time.sleep(wait + 1)
+
+
+def resolve_chat(state: dict) -> str | None:
+    """Chat-ID aus Secret, aus dem (verschlüsselten) Zustand, oder automatisch über das
+    START im Bot. Der erste private Chat wird dauerhaft übernommen."""
+    env = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if env:
+        return env
+    if state.get("chat_id"):
+        return state["chat_id"]
+    res = tg("getUpdates", {"allowed_updates": json.dumps(["message"])}).get("result", [])
+    chats = [u["message"]["chat"]["id"] for u in res
+             if "message" in u and u["message"]["chat"].get("type") == "private"]
+    if not chats:
+        return None
+    state["chat_id"] = str(chats[0])
+    state["chat_new"] = True
+    return state["chat_id"]
+
+
 def send(text: str, dry: bool) -> None:
     if dry:
         print("-" * 60 + "\n" + re.sub(r"<[^>]+>", "", text))
         return
-    token = os.environ["TELEGRAM_BOT_TOKEN"]
-    chat = os.environ["TELEGRAM_CHAT_ID"]
-    data = urllib.parse.urlencode({"chat_id": chat, "text": text, "parse_mode": "HTML",
-                                   "disable_web_page_preview": "true"}).encode()
-    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
-    with urllib.request.urlopen(req, timeout=20) as r:
-        r.read()
+    if not CHAT_ID:
+        raise RuntimeError("kein Telegram-Chat")
+    tg("sendMessage", {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML",
+                       "disable_web_page_preview": "true"})
     time.sleep(1)
 
 
@@ -438,13 +478,42 @@ def run(dry: bool, probe: bool) -> None:
           f"{alerts} Alarme, {news_sent} News, {errors} Fehler")
 
 
+def welcome(n: int) -> str:
+    return (f"✅ Aktien-Alarm-Bot ist verbunden (läuft auf GitHub). Beobachte {n} Werte.\n"
+            f"Kursalarme, wichtige Schlagzeilen und Übersichten kommen hier rein.\n\n{DISCLAIMER}")
+
+
 def main() -> None:
+    global CHAT_ID
     args = set(sys.argv[1:])
     dry = "--dry-run" in args
+    if not dry:
+        state = load_state()
+        try:
+            CHAT_ID = resolve_chat(state)
+        except Exception as e:
+            print(f"Telegram gerade nicht erreichbar: {type(e).__name__} {getattr(e, 'code', '')}")
+            return
+        if not CHAT_ID:
+            print("Noch kein Telegram-Chat verbunden: im Bot START tippen bzw. eine Nachricht schreiben.")
+            return
+        if state.pop("chat_new", False):
+            try:
+                send(welcome(len(load_watchlist())), dry)
+                print("Chat automatisch verbunden, Begrüßung gesendet.")
+            except Exception as e:
+                print(f"Begrüßung fehlgeschlagen: {type(e).__name__}")
+                return
+            save_state(state)
+            if "--test" in args:
+                return
+            if "--probe" not in args:
+                run(dry, True)   # direkt einen Probe-Alarm hinterher
+                return
+        else:
+            save_state(state)
     if "--test" in args:
-        n = len(load_watchlist())
-        send(f"✅ Aktien-Alarm-Bot ist verbunden (läuft auf GitHub). Beobachte {n} Werte.\n"
-             f"Kursalarme, wichtige Schlagzeilen und Übersichten kommen hier rein.\n\n{DISCLAIMER}", dry)
+        send(welcome(len(load_watchlist())), dry)
         print("Testnachricht gesendet.")
         return
     run(dry, "--probe" in args)
