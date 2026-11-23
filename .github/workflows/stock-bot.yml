@@ -1,0 +1,95 @@
+name: Aktien-Alarm-Bot
+
+# GitHub startet zeitgesteuerte Workflows oft nur alle paar Stunden.
+# Deshalb läuft jeder Start ~5,5 h und prüft darin alle 5 min; am Ende startet er
+# sich selbst neu (lückenlose Kette). Der Stunden-Cron ist nur das Sicherheitsnetz.
+#
+# Datenschutz: Watchlist, Einstiegskurse und Schwellen stehen nur in verschlüsselten
+# Secrets. Der Zustand (state.json) wird NICHT committet, sondern verschlüsselt
+# (AES-256, Schlüssel = Secret STATE_KEY) im Actions-Cache gehalten.
+# Das Skript schreibt keine Namen/Kurse ins (öffentliche) Log.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Beim Start zusätzlich senden (test = Testnachricht + Probe-Alarm)"
+        type: choice
+        default: normal
+        options: [normal, test, probe]
+
+permissions:
+  contents: read
+  actions: write          # nächsten Lauf starten + alte Caches aufräumen
+
+concurrency:
+  group: stock-bot
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      WATCHLIST: ${{ secrets.WATCHLIST }}
+      SETTINGS: ${{ secrets.SETTINGS }}
+      FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+      STATE_KEY: ${{ secrets.STATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Zustand laden (verschlüsselt)
+        uses: actions/cache/restore@v4
+        with:
+          path: state.enc
+          key: stock-state-${{ github.run_id }}
+          restore-keys: stock-state-
+
+      - name: Zustand entschlüsseln
+        run: |
+          if [ -f state.enc ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:STATE_KEY -in state.enc -out state.json \
+              || { echo "Zustand nicht lesbar, starte frisch"; rm -f state.json; }
+          fi
+
+      - name: Testnachricht / Probe-Alarm
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'normal' }}
+        run: |
+          if [ "${{ inputs.mode }}" = "test" ]; then python3 stock_bot.py --test; fi
+          python3 stock_bot.py --probe
+
+      - name: Kurse und News prüfen (Schleife, alle 5 min)
+        run: |
+          end=$(( $(date +%s) + 330*60 ))
+          while [ "$(date +%s)" -lt "$end" ]; do
+            python3 stock_bot.py || echo "Lauf fehlgeschlagen, weiter geht's"
+            [ -f state.json ] && openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:STATE_KEY -in state.json -out state.enc || echo "Zustand nicht gesichert"
+            sleep 300
+          done
+
+      - name: Zustand speichern
+        if: ${{ always() }}
+        uses: actions/cache/save@v4
+        with:
+          path: state.enc
+          key: stock-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Alte Zustände aufräumen
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --repo "${{ github.repository }}" --key stock-state- --sort created_at --order desc --limit 50 --json id -q '.[3:][].id' \
+            | while read -r id; do gh cache delete "$id" --repo "${{ github.repository }}" >/dev/null || true; done
+
+      - name: Nächsten Lauf starten (lückenlose Kette)
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run stock-bot.yml --repo "${{ github.repository }}" --ref main

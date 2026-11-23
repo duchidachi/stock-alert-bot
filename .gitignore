@@ -1,0 +1,5 @@
+state.json
+state.enc
+__pycache__/
+.env
+*.local
