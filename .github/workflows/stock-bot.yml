@@ -69,7 +69,9 @@ jobs:
           end=$(( $(date +%s) + 330*60 ))
           while [ "$(date +%s)" -lt "$end" ]; do
             python3 stock_bot.py || echo "Lauf fehlgeschlagen, weiter geht's"
-            [ -f state.json ] && openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:STATE_KEY -in state.json -out state.enc || echo "Zustand nicht gesichert"
+            if [ -f state.json ]; then
+              openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:STATE_KEY -in state.json -out state.enc || echo "Zustand nicht gesichert"
+            fi
             sleep 300
           done
 
