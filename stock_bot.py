@@ -89,7 +89,9 @@ def load_watchlist() -> list[dict]:
             "name": name or isin,
             "isin": isin,
             "entry": parse_num(parts[2]),
-            "drop": parse_num(parts[3]) or 10.0,
+            # 4. Feld: "10" = 10 % unter Einstieg, "20 €" = Alarm bei festem Kurs 20 €
+            "limit_price": parse_num(parts[3]) if re.search(r"€|eur", parts[3], re.I) else None,
+            "drop": (None if re.search(r"€|eur", parts[3], re.I) else parse_num(parts[3])) or 10.0,
             "ticker": parts[4].upper(),
         })
     return items
@@ -354,13 +356,20 @@ def check_prices(item, q, st, settings, now, dry) -> int:
             st["fast_ts"] = now.timestamp()
             sent += 1
 
-    # 3) X % unter Einstieg (einmal, bis der Kurs wieder drüber ist)
-    if item["entry"]:
-        limit = item["entry"] * (1 - item["drop"] / 100)
-        vs = (q["price"] / item["entry"] - 1) * 100
+    # 3) Unter Einstieg bzw. fester Alarmkurs (einmal, bis der Kurs wieder drüber ist)
+    if item["entry"] or item["limit_price"]:
+        if item["limit_price"]:
+            limit = item["limit_price"]
+            kind = f"Alarmkurs {fmt_eur(limit)} erreicht"
+        else:
+            limit = item["entry"] * (1 - item["drop"] / 100)
+            kind = f"{item['drop']:g} %-Marke unter Einstieg erreicht"
+        detail = f"Alarmkurs {fmt_eur(limit)}"
+        if item["entry"]:
+            vs = (q["price"] / item["entry"] - 1) * 100
+            detail = f"Einstieg {fmt_eur(item['entry'])} · jetzt {fmt_pct(vs)} · {detail}"
         if q["price"] <= limit and not st.get("below_entry"):
-            send(price_alert(item, q, f"{item['drop']:g} %-Marke unter Einstieg erreicht",
-                             f"Einstieg {fmt_eur(item['entry'])} · jetzt {fmt_pct(vs)}", nws(), arrow="🔻"), dry)
+            send(price_alert(item, q, kind, detail, nws(), arrow="🔻"), dry)
             st["below_entry"] = True
             sent += 1
         elif q["price"] > limit * 1.01:

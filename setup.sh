@@ -113,7 +113,7 @@ for d in r[:6]:
     ENTRY="$(ask "Dein Einstiegskurs in € (Enter = keiner): ")"
     DROP=""
     if [[ -n "$ENTRY" ]]; then
-      DROP="$(ask "Alarm bei wie viel % unter Einstieg? [10]: ")"; DROP="${DROP:-10}"
+      DROP="$(ask "Alarm ab: Prozent unter Einstieg (z. B. 10) ODER fester Kurs mit € (z. B. 20 €) [10]: ")"; DROP="${DROP:-10}"
     fi
     TICKER=""
     [[ "$ISIN" == US* ]] && TICKER="$(ask "US-Ticker für englische Finnhub-News (optional, z. B. aus der Kursliste): ")"
