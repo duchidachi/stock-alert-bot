@@ -5,7 +5,9 @@ Ein kleiner Telegram-Bot, der eine private Watchlist überwacht und Bescheid gib
 1. **Kursalarm**: Bewegung zum Vortagesschluss (Standard ±4 %, danach erneut bei ±8 %, …)
    und schnelle Bewegung (Standard ±2 % innerhalb von 60 min). Jede Meldung bringt Kurs,
    %-Änderung und die 3 neuesten Schlagzeilen mit.
-2. **Einstiegs-Alarm** (optional): Kurs fällt X % unter deinen Einstiegskurs.
+2. **Einstiegs-Alarm** (optional): Kurs fällt X % unter deinen Kaufkurs oder unter einen festen Alarmkurs.
+   **Zielkurs-Alarm** (optional): Kurs erreicht deinen Wunschkurs, z. B. zum Nachkaufen (fallend)
+   oder zum Gewinnmitnehmen (steigend). Meldet einmal, scharf wieder nach 3 % Abstand.
 3. **Schlagzeilen-Wächter**: wichtige News auch ohne Kurssprung (CEO, Rücktritt/Rückkehr,
    Quartalszahlen, Prognose, Übernahme, Klage, Dividende, Rückkauf, Ad-hoc …),
    dedupliziert, höchstens 3 pro Firma und Tag.
@@ -68,9 +70,16 @@ tag=4 schnell=2 fenster=60 uebersicht=morgen,abend news_max=3
 
 `uebersicht=abend` = nur abends, `uebersicht=aus` = keine Übersicht.
 
+### Zielkurse (Secret `ZIELE`)
+
+Eine Zeile pro Ziel: `Name; ISIN; Kurs`. `60` = Richtung automatisch (liegt der Kurs drüber,
+wartet der Bot aufs Fallen), `<60` = fällt auf/unter 60 €, `>120` = steigt auf/über 120 €.
+Mehrere Ziele pro Wert gehen, auch für Werte außerhalb der Watchlist. Am einfachsten über
+`./setup.sh`, Schritt 3.
+
 ### Watchlist-Format (Secret `WATCHLIST`)
 
-Eine Zeile pro Wert: `Name; ISIN; Einstiegskurs; Minus-%; US-Ticker`. Nur Name und
+Eine Zeile pro Wert: `Name; ISIN; Einstiegskurs; Alarm; US-Ticker`. Alarm = `10` (10 % unter Einstieg) oder `20 €` (fester Kurs). Nur Name und
 ISIN sind Pflicht. Normalerweise erzeugt `setup.sh` das für dich.
 
 ## Betrieb

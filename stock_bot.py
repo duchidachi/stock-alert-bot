@@ -97,6 +97,24 @@ def load_watchlist() -> list[dict]:
     return items
 
 
+def load_targets() -> list[dict]:
+    """ZIELE: eine Zeile pro Zielkurs:  Name; ISIN; Kurs
+    Kurs ohne Zeichen: Richtung ergibt sich beim ersten Check (liegt der Kurs drüber, wird auf
+    Fallen gewartet, sonst auf Steigen). "<60" = fällt auf/unter 60 €, ">120" = steigt auf/über 120 €.
+    Mehrere Zeilen pro Wert sind erlaubt."""
+    out = []
+    for line in os.environ.get("ZIELE", "").replace("\\n", "\n").splitlines():
+        parts = [p.strip() for p in line.split(";")] + ["", "", ""]
+        isin, raw = parts[1].upper(), parts[2]
+        price = parse_num(raw.replace("<", "").replace(">", ""))
+        if not re.fullmatch(r"[A-Z]{2}[A-Z0-9]{9}[0-9]", isin) or not price:
+            continue
+        d = "down" if "<" in raw else "up" if ">" in raw else ""
+        out.append({"name": parts[0] or isin, "isin": isin, "price": price, "dir": d,
+                    "ticker": ""})
+    return out
+
+
 def load_settings() -> dict:
     """SETTINGS (optional): z. B.  tag=4 schnell=2 fenster=60 uebersicht=morgen,abend"""
     s = {"tag": 4.0, "schnell": 2.0, "fenster": 60.0, "uebersicht": "morgen,abend",
@@ -418,6 +436,25 @@ def overview(items, quotes, title: str) -> str:
     return "\n".join(lines) + f"\n\n{DISCLAIMER}"
 
 
+def check_target(t, q, st, dry) -> int:
+    """Meldet einmal, wenn der Kurs den Zielkurs erreicht; scharf wieder, wenn er sich 3 % entfernt."""
+    price, goal = q["price"], t["price"]
+    d = st.get("dir") or t["dir"] or ("down" if price > goal else "up")
+    st["dir"] = d
+    hit = price <= goal if d == "down" else price >= goal
+    if hit and not st.get("hit"):
+        word = "gefallen auf" if d == "down" else "gestiegen auf"
+        send(price_alert(t, q, f"Zielkurs {fmt_eur(goal)} erreicht",
+                         f"Kurs ist {word} {fmt_eur(price)} (Ziel {fmt_eur(goal)}). "
+                         "Ob du handelst, entscheidest du.", all_news(t), arrow="🎯"), dry)
+        st["hit"] = True
+        return 1
+    away = price > goal * 1.03 if d == "down" else price < goal * 0.97
+    if st.get("hit") and away:
+        st["hit"] = False
+    return 0
+
+
 def maybe_overview(items, quotes, state, settings, now, dry) -> int:
     if now.weekday() >= 5:
         return 0
@@ -479,12 +516,34 @@ def run(dry: bool, probe: bool) -> None:
             errors += 1
             print(f"News-Fehler bei Wert {idx}: {type(e).__name__}")
 
+    # Zielkurse (auch für Werte außerhalb der Watchlist)
+    targets = load_targets()
+    tstate = state.setdefault("targets", {})
+    live = set()
+    for idx, t in enumerate(targets if not probe else [], 1):
+        key = hashlib.sha1(f"{t['isin']}|{t['price']}|{t['dir']}".encode()).hexdigest()[:10]
+        live.add(key)
+        try:
+            q = quotes.get(t["isin"])
+            if q is None:
+                iid = ls_instrument(t["isin"], state)
+                q = ls_quote(iid) if iid else None
+                if q:
+                    quotes[t["isin"]] = q
+            if q and now.timestamp() - q["ts"] < 20 * 60:
+                alerts += check_target(t, q, tstate.setdefault(key, {}), dry)
+        except Exception as e:
+            errors += 1
+            print(f"Ziel-Fehler bei Ziel {idx}: {type(e).__name__}")
+    if not probe:
+        state["targets"] = {k: v for k, v in tstate.items() if k in live}
+
     if not probe:
         alerts += maybe_overview(items, quotes, state, settings, now, dry)
     state["initialized"] = True
     save_state(state)
     print(f"{now:%H:%M} geprüft: {len(items)} Werte, {len(quotes)} Kurse, "
-          f"{alerts} Alarme, {news_sent} News, {errors} Fehler")
+          f"{len(targets)} Ziele, {alerts} Alarme, {news_sent} News, {errors} Fehler")
 
 
 def welcome(n: int) -> str:

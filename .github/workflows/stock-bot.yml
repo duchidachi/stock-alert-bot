@@ -36,6 +36,7 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       WATCHLIST: ${{ secrets.WATCHLIST }}
       SETTINGS: ${{ secrets.SETTINGS }}
+      ZIELE: ${{ secrets.ZIELE }}
       FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
       STATE_KEY: ${{ secrets.STATE_KEY }}
     steps:

@@ -2,8 +2,9 @@
 # Richtet den Aktien-Alarm-Bot ein bzw. ändert ihn später.
 #   1) Telegram-Bot verbinden (Token aus Zwischenablage, Chat-ID automatisch)
 #   2) Watchlist + optionale Einstiegskurse
-#   3) Schwellen
-#   4) optional Finnhub-Key (englische US-News)
+#   3) Zielkurse (z. B. Wunsch-Einstieg)
+#   4) Schwellen
+#   5) optional Finnhub-Key (englische US-News)
 # Alles landet NUR als verschlüsseltes GitHub-Secret. Nichts wird lokal gespeichert,
 # nichts landet im Repo. Jeder Schritt lässt sich überspringen (Enter).
 set -euo pipefail
@@ -14,7 +15,7 @@ ask() { local a; read -r -p "$1" a </dev/tty; printf '%s' "$a"; }
 LS="https://www.ls-tc.de/_rpc/json/.lstc/instrument/search/main?localeId=2&q="
 
 # ------------------------------------------------------------------ 1 Telegram
-echo "== 1/4 Telegram-Bot =="
+echo "== 1/5 Telegram-Bot =="
 DO_TG="j"
 if have_secret TELEGRAM_BOT_TOKEN; then
   DO_TG="$(ask "Telegram ist schon eingerichtet. Neu verbinden? [j/N] ")"
@@ -83,7 +84,7 @@ fi
 
 # ------------------------------------------------------------------ 2 Watchlist
 echo
-echo "== 2/4 Watchlist =="
+echo "== 2/5 Watchlist =="
 DO_WL="j"
 if have_secret WATCHLIST; then
   DO_WL="$(ask "Es gibt schon eine Watchlist. Komplett neu eingeben? [j/N] ")"
@@ -132,9 +133,58 @@ else
   echo "→ übersprungen"
 fi
 
-# ------------------------------------------------------------------ 3 Schwellen
+# ------------------------------------------------------------------ 3 Zielkurse
 echo
-echo "== 3/4 Schwellen =="
+echo "== 3/5 Zielkurse (z. B. Wunsch-Einstieg zum Nachkaufen) =="
+if have_secret ZIELE; then Q0="Es gibt schon Zielkurse. Komplett neu eingeben? [j/N] "; else Q0="Zielkurse einrichten? [j/N] "; fi
+DO_Z="$(ask "$Q0")"
+if [[ "$DO_Z" =~ ^[jJyY] ]]; then
+  echo "Pro Ziel: Firmenname/ISIN suchen, dann Kurs in €. Enter ohne Eingabe = fertig."
+  echo "Kurs einfach als Zahl (z. B. 60). Optional: <60 = Alarm wenn er auf/unter 60 € fällt, >120 = wenn er auf/über 120 € steigt."
+  Z=""
+  while true; do
+    echo
+    Q="$(ask "Suchbegriff/ISIN: ")"
+    [[ -z "$Q" ]] && break
+    HITS="$(curl -fsS -A "Mozilla/5.0" "${LS}$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$Q")" \
+      | python3 -c '
+import sys,json
+try: r=json.load(sys.stdin)
+except Exception: r=[]
+for d in r[:6]:
+    if d.get("isin") and d.get("categorySymbol")=="STK":
+        print(d["isin"]+"\t"+d["displayname"].strip())' || true)"
+    if [[ -z "$HITS" ]]; then echo "✗ Nichts gefunden, anderen Begriff probieren."; continue; fi
+    i=0; while IFS=$'\t' read -r isin nm; do i=$((i+1)); echo "  $i) $nm  ($isin)"; done <<< "$HITS"
+    PICK="$(ask "Welche Nummer? [1] ")"; PICK="${PICK:-1}"
+    LINE="$(sed -n "${PICK}p" <<< "$HITS")"
+    [[ -z "$LINE" ]] && { echo "✗ Ungültige Nummer."; continue; }
+    ISIN="${LINE%%$'\t'*}"; DEF="${LINE#*$'\t'}"
+    NAME="$(ask "Anzeigename [$DEF]: ")"; NAME="${NAME:-$DEF}"; NAME="${NAME//;/,}"
+    while true; do
+      K="$(ask "Zielkurs in € (z. B. 60 oder <60 oder >120): ")"
+      [[ "$K" =~ ^[\<\>]?[[:space:]]*[0-9]+([.,][0-9]+)?[[:space:]]*(€|EUR|eur)?$ ]] && break
+      echo "✗ Bitte nur eine Zahl, optional mit < oder > davor."
+    done
+    Z+="${NAME}; ${ISIN}; ${K}"$'\n'
+    echo "✓ Ziel für $NAME aufgenommen"
+  done
+  if [[ -n "$Z" ]]; then
+    echo; echo "Deine Zielkurse (Name; ISIN; Kurs):"; printf '%s' "$Z" | sed 's/^/  /'
+    OK="$(ask "So speichern? [J/n] ")"
+    if [[ ! "$OK" =~ ^[nN] ]]; then printf '%s' "$Z" | gh secret set ZIELE; echo "✓ Zielkurse gespeichert"; fi
+  else
+    DEL="$(ask "Keine Ziele eingegeben. Alle bisherigen Zielkurse löschen? [j/N] ")"
+    [[ "$DEL" =~ ^[jJyY] ]] && { gh secret delete ZIELE >/dev/null 2>&1 || true; echo "✓ Zielkurse gelöscht"; }
+  fi
+  unset Z
+else
+  echo "→ übersprungen"
+fi
+
+# ------------------------------------------------------------------ 4 Schwellen
+echo
+echo "== 4/5 Schwellen =="
 echo "Standard: ±4 % zum Vortag, ±2 % in 60 min, Übersicht morgens (8:15) + abends (22:15), max. 3 News/Tag/Firma."
 echo "Eigene Werte z. B.:  tag=5 schnell=3 fenster=60 uebersicht=abend news_max=2   (uebersicht=aus = keine)"
 SET="$(ask "Enter = Standard behalten, sonst eigene Zeile: ")"
@@ -142,9 +192,9 @@ if [[ -n "$SET" ]]; then printf '%s' "$SET" | gh secret set SETTINGS; echo "✓ 
 elif ! have_secret SETTINGS; then printf '%s' "tag=4 schnell=2 fenster=60 uebersicht=morgen,abend" | gh secret set SETTINGS; echo "✓ Standard gespeichert"
 else echo "→ unverändert"; fi
 
-# ------------------------------------------------------------------ 4 Finnhub
+# ------------------------------------------------------------------ 5 Finnhub
 echo
-echo "== 4/4 Finnhub (optional, englische US-News) =="
+echo "== 5/5 Finnhub (optional, englische US-News) =="
 FH="$(ask "Finnhub-Key einrichten? Kopier ihn zuerst, dann 'j' + Enter. [j/N] ")"
 if [[ "$FH" =~ ^[jJyY] ]]; then
   KEY="$(pbpaste 2>/dev/null | tr -d '[:space:]' || true)"
@@ -170,4 +220,8 @@ for id in $(gh run list --workflow stock-bot.yml --status in_progress --json dat
 for id in $(gh run list --workflow stock-bot.yml --status queued --json databaseId -q '.[].databaseId'); do gh run cancel "$id" >/dev/null || true; done
 gh workflow enable stock-bot.yml >/dev/null 2>&1 || true
 sleep 5
-gh workflow run stock-bot.yml -f mode=test && echo "✓ Fertig. In 1–2 Minuten sollten Testnachricht und Probe-Alarm auf dem Handy sein."
+if [[ "$DO_TG" =~ ^[jJyY] ]]; then
+  gh workflow run stock-bot.yml -f mode=test && echo "✓ Fertig. In 1–2 Minuten sollten Testnachricht und Probe-Alarm auf dem Handy sein."
+else
+  gh workflow run stock-bot.yml -f mode=normal && echo "✓ Fertig. Der Bot läuft mit den neuen Einstellungen."
+fi
